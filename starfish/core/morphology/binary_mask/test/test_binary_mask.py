@@ -1,6 +1,8 @@
 import numpy as np
 from skimage.morphology import binary_dilation
 
+import starfish.data
+
 from starfish.core.morphology.label_image import LabelImage
 from starfish.core.types import Axes, Coordinates
 from .factories import binary_mask_collection_2d, label_array_2d
@@ -46,6 +48,14 @@ def test_from_label_image():
     assert np.array_equal(region_1[Coordinates.X.value],
                           physical_ticks[Coordinates.X][3:6])
 
+def test_from_fiji_roi_set():
+    merfish = starfish.data.MERFISH()
+    fov = merfish['fov_000']
+    dapi = fov.get_image("nuclei")
+
+    masks = BinaryMaskCollection.from_fiji_roi_set('/Users/shannon.axelrod/dev/starfish/RoiSet.zip',
+                                                   dapi)
+    return
 
 def test_uncropped_mask():
     """Test that BinaryMaskCollection.uncropped_mask() works correctly.

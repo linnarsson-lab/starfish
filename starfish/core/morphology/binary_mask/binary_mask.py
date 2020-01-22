@@ -19,8 +19,11 @@ from typing import (
 )
 
 import numpy as np
+import pandas as pd
 import xarray as xr
+from skimage import draw
 from skimage import io
+from read_roi import read_roi_zip
 from skimage.measure import regionprops
 from skimage.measure._regionprops import _RegionProperties
 
@@ -265,6 +268,84 @@ class BinaryMaskCollection:
         )
 
     @classmethod
+    def from_fiji_roi_set(cls, path_to_roi_set_zip: Union[str, Path],
+                        original_image: ImageStack):
+        """
+        Construct BinaryMaskCollection from external Fiji ROI set.
+
+        Parameters
+        ----------
+        path_to_roi_set_zip : Union[str, Path]
+            Path to an external fiji roi file
+        original_image : ImageStack
+            Dapi image used in fiji segmentation workflow
+
+        Returns
+        --------
+        BinaryMaskCollection
+
+        Notes
+        -----
+        This method only supports construction of masks from 2D polygons
+        at this time.
+        """
+        roi_set = read_roi_zip(path_to_roi_set_zip)
+
+        # Get the physical ticks from the original dapi image
+        physical_ticks = {Coordinates.Y: original_image.xarray.yc.values,
+                          Coordinates.X: original_image.xarray.xc.values}
+
+        # Get the pixel values from the original dapi image
+        pixel_coords = {Axes.Y: original_image.xarray.y.values,
+                        Axes.X: original_image.xarray.x.values}
+
+        masks = []
+        # for each region (and its properties):
+        for label, roi in enumerate(roi_set.values()):
+            polygon = np.array([roi['y'], roi['x']]).T
+
+            # get the maximum extent of the polygon
+            minima = np.floor(np.amin(polygon, axis=0))
+            maxima = np.ceil(np.amax(polygon, axis=0))
+            bbox = pd.DataFrame({"min": minima, "max": maxima}, index=["y", "x"], dtype=int)
+
+            coords = {d: list(range(bbox.loc[d, "min"], bbox.loc[d, "max"]))
+                      for d in bbox.index}
+
+            # create physical coordinate labels by taking the overlapping
+            # subset from the full span of labels
+            for dim, ticks in physical_ticks.items():
+                # magic number alert - this is in
+                # SegmentationMaskCollection.from_label_image too, it's
+                # extracting x from xc or y from yc. Unintuitive.
+                axis = dim.value[0]
+                pixel_indices = range(bbox.loc[axis, "min"], bbox.loc[axis, "max"])
+                coords[dim] = (axis, ticks[pixel_indices])
+
+            # The polygon will be drawn on a smaller grid, only the physical coordinates
+            # should be aware of the full pixel space, we want the origin of the drawn
+            # polygon to be (0, 0)
+            vertex_row_coords, vertex_col_coords = polygon.T
+            vertex_col_coords -= vertex_col_coords.min()
+            vertex_row_coords -= vertex_row_coords.min()
+
+            # draw a mask from the polygon
+            shape = len(coords[Coordinates.Y.value][1]), len(coords[Coordinates.X.value][1])
+            mask = np.zeros(original_image.tile_shape, dtype=bool)
+            fill_row_coords, fill_col_coords = draw.polygon(
+                vertex_row_coords, vertex_col_coords, shape
+            )
+            mask[fill_row_coords, fill_col_coords] = True
+
+            masks.append(mask)
+        return BinaryMaskCollection.from_binary_arrays_and_ticks(arrays=masks,
+                                                                 pixel_ticks=pixel_coords,
+                                                                 physical_ticks=physical_ticks,
+                                                                 log=original_image.log)
+
+
+
+    @classmethod
     def from_external_labeled_image(cls, path_to_labeled_image: Union[str, Path],
                                     original_image: ImageStack):
         """
@@ -282,7 +363,6 @@ class BinaryMaskCollection:
         -------
         BinaryMaskCollection
         """
-
         # Load the label image generated from another program
         label_image = io.imread(path_to_labeled_image)
 
